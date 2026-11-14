@@ -24,18 +24,23 @@ class MapaTest(unittest.TestCase):
     def test_reuses_a_recent_map(self):
         now = datetime(2026, 11, 14, 12, 0, tzinfo=timezone.utc)
         stamp = lambda d: (now - d).strftime("%Y-%m-%dT%H:%M:%SZ")  # noqa: E731
-        self.assertEqual(mapa.decide(None, now), (True, True))
-        fresh = {"updated": stamp(timedelta(hours=1)), "dustUpdated": stamp(timedelta(hours=1))}
-        self.assertEqual(mapa.decide(fresh, now), (False, False))
-        old = {"updated": stamp(timedelta(hours=3)), "dustUpdated": stamp(timedelta(hours=3))}
-        self.assertEqual(mapa.decide(old, now), (True, False))
-        older_dust = {"updated": stamp(timedelta(hours=3)), "dustUpdated": stamp(timedelta(hours=6))}
-        self.assertEqual(mapa.decide(older_dust, now), (True, True))
+        self.assertEqual(mapa.decide(None, now), (True, {"dust", "waves"}))
+
+        def h(n):
+            return stamp(timedelta(hours=n))
+
+        fresh = {"updated": h(1), "dustUpdated": h(1), "wavesUpdated": h(1)}
+        self.assertEqual(mapa.decide(fresh, now), (False, set()))
+        old = {"updated": h(3), "dustUpdated": h(3), "wavesUpdated": h(3)}
+        self.assertEqual(mapa.decide(old, now), (True, set()))
+        # Oleaje cada 6 horas y calima cada 12.
+        self.assertEqual(mapa.decide({"updated": h(3), "dustUpdated": h(6), "wavesUpdated": h(6)}, now), (True, {"waves"}))
+        self.assertEqual(mapa.decide({"updated": h(3), "dustUpdated": h(12), "wavesUpdated": h(3)}, now), (True, {"dust"}))
 
     def test_grids_stay_within_the_free_quota(self):
         total = sum(nx * ny for _, _, _, _, nx, ny in mapa.GRIDS)
-        # Cada 3 h el tiempo y cada 6 h el polvo: 8 + 4 consultas por punto al día.
-        self.assertLess(total * 12, 10_000)
+        # Tiempo cada 3 h (8), oleaje cada 6 h (4) y calima cada 12 h (2) por punto y día.
+        self.assertLess(total * (8 + 4 + 2), 10_000)
 
 
 if __name__ == "__main__":

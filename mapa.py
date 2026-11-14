@@ -1,5 +1,5 @@
 """Genera el mapa animado de MeteoES: 24 horas de lluvia, nubes, viento,
-temperatura y calima en una malla sobre la Península, Baleares y Canarias.
+temperatura, calima y oleaje en una malla sobre la Península, Baleares y Canarias.
 
 Uso:  python mapa.py site/mapa.json
 
@@ -19,11 +19,20 @@ from datetime import datetime, timedelta, timezone
 PUBLISHED = "https://petronsa.github.io/meteoes/mapa.json"
 FORECAST = "https://api.open-meteo.com/v1/forecast"
 AIR = "https://air-quality-api.open-meteo.com/v1/air-quality"
+MARINE = "https://marine-api.open-meteo.com/v1/marine"
 HOURS = 24
 BATCH = 100
-# Se regenera cada 3 horas; el polvo cambia más despacio y va cada 6.
+# El tiempo se regenera cada 3 horas.
 MAX_AGE = timedelta(hours=2, minutes=50)
-DUST_MAX_AGE = timedelta(hours=5, minutes=50)
+
+# Capas que cambian despacio y se piden con menos frecuencia, para no pasar
+# de las 10.000 consultas diarias gratuitas: (API, {campo: (variable, escala)}, edad máxima).
+# Entre medias se reutilizan, con su hora de inicio ("<grupo>Start") para cuadrarlas.
+SLOW = {
+    "dust": (AIR, {"dust": ("dust", 1)}, timedelta(hours=11, minutes=50)),  # µg/m³
+    "waves": (MARINE, {"wave": ("wave_height", 10), "wdir": ("wave_direction", 1)},  # dm y grados
+              timedelta(hours=5, minutes=50)),
+}
 
 # Mallas: (nombre, lon0, lat0, paso, columnas, filas). La fila 0 es la más al sur.
 # La principal cubre todo el recorte del mapa, Atlántico incluido.
@@ -107,7 +116,9 @@ def start_time(responses: list[dict]) -> str:
     return times[0] + "Z"
 
 
-def build(previous: dict | None, now: datetime, with_dust: bool) -> dict:
+def build(previous: dict | None, now: datetime, due: set[str]) -> dict:
+    """Mapa nuevo: el tiempo siempre; de las capas lentas, solo las de [due]."""
+    stamp = now.strftime("%Y-%m-%dT%H:%M:%SZ")
     grids = []
     start = None
     for name, lon0, lat0, step, nx, ny in GRIDS:
@@ -117,24 +128,28 @@ def build(previous: dict | None, now: datetime, with_dust: bool) -> dict:
         grid = {"name": name, "lon0": lon0, "lat0": lat0, "step": step, "nx": nx, "ny": ny}
         for key, (variable, scale) in FIELDS.items():
             grid[key] = pack(weather, variable, scale)
-        if with_dust:
-            grid["dust"] = pack(fetch(AIR, pts, ["dust"]), "dust", 1)
-        elif previous:
-            old = next((g for g in previous.get("grids", []) if g.get("name") == name), None)
-            if old and "dust" in old:
-                grid["dust"] = old["dust"]
-                grid["dustStart"] = old.get("dustStart", previous.get("start"))
-        if with_dust:
-            grid["dustStart"] = start
+        old = next((g for g in (previous or {}).get("grids", []) if g.get("name") == name), None)
+        for group, (api, fields, _) in SLOW.items():
+            if group in due:
+                data = fetch(api, pts, [v for v, _ in fields.values()])
+                for key, (variable, scale) in fields.items():
+                    grid[key] = pack(data, variable, scale)
+                grid[f"{group}Start"] = start
+            elif old and all(k in old for k in fields):
+                for key in fields:
+                    grid[key] = old[key]
+                grid[f"{group}Start"] = old.get(f"{group}Start", previous.get("start"))
         grids.append(grid)
-    return {
-        "updated": now.strftime("%Y-%m-%dT%H:%M:%SZ"),
-        "dustUpdated": now.strftime("%Y-%m-%dT%H:%M:%SZ") if with_dust else (previous or {}).get("dustUpdated"),
+    result = {
+        "updated": stamp,
         "source": "Open-Meteo (CC BY 4.0)",
         "start": start,
         "hours": HOURS,
         "grids": grids,
     }
+    for group in SLOW:
+        result[f"{group}Updated"] = stamp if group in due else (previous or {}).get(f"{group}Updated")
+    return result
 
 
 def _age(stamp: str | None, now: datetime) -> timedelta:
@@ -143,11 +158,13 @@ def _age(stamp: str | None, now: datetime) -> timedelta:
     return now - datetime.strptime(stamp, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
 
 
-def decide(previous: dict | None, now: datetime) -> tuple[bool, bool]:
-    """(regenerar el tiempo, regenerar el polvo)."""
+def decide(previous: dict | None, now: datetime) -> tuple[bool, set[str]]:
+    """(regenerar el tiempo, capas lentas que toca renovar a la vez)."""
     weather = previous is None or _age(previous.get("updated"), now) > MAX_AGE
-    dust = previous is None or _age(previous.get("dustUpdated"), now) > DUST_MAX_AGE
-    return weather, weather and dust
+    if not weather:
+        return False, set()
+    due = {g for g, (_, _, age) in SLOW.items() if previous is None or _age(previous.get(f"{g}Updated"), now) > age}
+    return True, due
 
 
 def main(out: str) -> int:
@@ -156,11 +173,11 @@ def main(out: str) -> int:
         previous = _get(PUBLISHED)
     except Exception:  # noqa: BLE001 — la primera vez no existe
         previous = None
-    refresh, dust = decide(previous, now)
+    refresh, due = decide(previous, now)
     result = previous
     if refresh:
         try:
-            result = build(previous, now, dust)
+            result = build(previous, now, due)
         except Exception as e:  # noqa: BLE001
             print(f"No se pudo regenerar el mapa: {e}", file=sys.stderr)
     if result is None:
