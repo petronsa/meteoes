@@ -32,12 +32,19 @@ jobs:
           python-version: "3.12"
 
       - name: Pruebas
-        run: python -m unittest -v test_avisos test_mapa
+        run: python -m unittest -v test_avisos test_mapa test_observacion
 
       - name: Descargar y filtrar avisos
         env:
           AEMET_API_KEY: ${{ secrets.AEMET_API_KEY }}
         run: python avisos.py site/avisos.json
+
+      # Lluvia medida en las estaciones. Si falla, los avisos se publican igual.
+      - name: Observaciones de las estaciones
+        continue-on-error: true
+        env:
+          AEMET_API_KEY: ${{ secrets.AEMET_API_KEY }}
+        run: python observacion.py site/observacion.json
 
       # Cada 3 horas se pide de nuevo a Open-Meteo; entre medias se vuelve a
       # publicar el mapa anterior. Si falla, los avisos se publican igual.
