@@ -5,6 +5,9 @@ Uso:  AEMET_API_KEY=... python observacion.py site/observacion.json
 Por cada estación se guarda su posición, la hora de su última observación y la
 precipitación medida en los 60 minutos anteriores. La app busca la estación más
 cercana y, si está lloviendo allí, lo muestra aunque el modelo no lo prevea.
+
+Si AEMET falla, se vuelve a publicar el archivo anterior (con su hora de
+actualización antigua): la comprobación de salud.py avisa si dura demasiado.
 """
 
 import json
@@ -15,6 +18,7 @@ import urllib.request
 from datetime import datetime, timedelta, timezone
 
 URL = "https://opendata.aemet.es/opendata/api/observacion/convencional/todas"
+PUBLISHED = "https://petronsa.github.io/meteoes/observacion.json"
 MAX_BYTES = 50 * 1024 * 1024
 # Estaciones que llevan más de 3 horas sin dar datos no sirven para decir "ahora".
 MAX_AGE = timedelta(hours=3)
@@ -94,16 +98,25 @@ def main() -> None:
     if not key:
         sys.exit("Falta AEMET_API_KEY")
     now = datetime.now(timezone.utc)
-    stations = latest(fetch(key), now)
-    doc = {
-        "updated": now.isoformat(timespec="seconds"),
-        "source": "AEMET. Agencia Estatal de Meteorología",
-        "stations": stations,
-    }
+    try:
+        stations = latest(fetch(key), now)
+        doc = {
+            "updated": now.isoformat(timespec="seconds"),
+            "source": "AEMET. Agencia Estatal de Meteorología",
+            "stations": stations,
+        }
+    except Exception as e:  # noqa: BLE001
+        print(f"No se pudieron renovar las observaciones: {e}", file=sys.stderr)
+        try:
+            doc = json.loads(_get(PUBLISHED))
+        except Exception:  # noqa: BLE001
+            sys.exit("Sin observaciones que publicar")
+        print(f"Se vuelven a publicar las de {doc.get('updated')}")
     os.makedirs(os.path.dirname(out) or ".", exist_ok=True)
     with open(out, "w", encoding="utf-8") as f:
         json.dump(doc, f, ensure_ascii=False, separators=(",", ":"))
-    raining = sum(1 for s in stations if s["prec"] > 0)
+    stations = doc.get("stations", [])
+    raining = sum(1 for s in stations if s.get("prec", 0) > 0)
     print(f"{len(stations)} estaciones ({raining} con lluvia) -> {out}")
 
 

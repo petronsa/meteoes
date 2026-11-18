@@ -32,7 +32,7 @@ jobs:
           python-version: "3.12"
 
       - name: Pruebas
-        run: python -m unittest -v test_avisos test_mapa test_observacion
+        run: python -m unittest -v test_avisos test_mapa test_observacion test_salud
 
       - name: Descargar y filtrar avisos
         env:
@@ -66,3 +66,10 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: gh api -X PUT "repos/${{ github.repository }}/actions/workflows/avisos.yml/enable"
+
+      # El mapa y las observaciones vuelven a publicar lo anterior si fallan, y
+      # así nadie se entera. Si algo lleva horas sin renovarse, este paso falla
+      # (después de publicar) para que GitHub mande un correo: al quedarse viejo
+      # y luego una vez al día mientras siga así.
+      - name: Comprobar que los datos están al día
+        run: python salud.py site
