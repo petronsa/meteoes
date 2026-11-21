@@ -24,6 +24,7 @@ CHECKS = [
     ("mapa.json", "updated", timedelta(hours=7), "Mapa: lluvia, nubes, viento y temperatura"),
     ("mapa.json", "wavesUpdated", timedelta(hours=13), "Mapa: oleaje"),
     ("mapa.json", "dustUpdated", timedelta(hours=25), "Mapa: calima"),
+    ("auditoria/resumen.json", "updated", timedelta(hours=4), "Auditoría"),
 ]
 # Entre ejecuciones hay 30 minutos (a veces más, si GitHub se retrasa).
 JUST_STALE = timedelta(minutes=40)

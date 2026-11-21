@@ -32,7 +32,9 @@ class SaludTest(unittest.TestCase):
             "avisos.json": {"updated": iso(avisos), "alerts": []},
             "observacion.json": {"updated": iso(obs), "stations": []},
             "mapa.json": {"updated": z(mapa), "wavesUpdated": z(waves), "dustUpdated": z(dust)},
+            "auditoria/resumen.json": {"updated": iso(timedelta(hours=1))},
         }
+        os.makedirs(os.path.join(self.site, "auditoria"), exist_ok=True)
         for name, doc in files.items():
             with open(os.path.join(self.site, name), "w", encoding="utf-8") as f:
                 json.dump(doc, f)

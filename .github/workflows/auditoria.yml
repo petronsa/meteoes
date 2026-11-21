@@ -1,0 +1,87 @@
+name: Auditoría
+
+# Cada hora guarda lo que muestra la app y lo que miden las estaciones de AEMET,
+# y rehace los resultados. Todo se guarda en la rama «auditoria» (así main no
+# se llena de commits); la tarea de los avisos copia su carpeta web/ a la página.
+on:
+  schedule:
+    - cron: "12 * * * *"
+  workflow_dispatch:
+    inputs:
+      historico:
+        description: "Rellenar también los últimos 12 meses (tarda unos 20 minutos)"
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+  actions: write   # para la renovación del final
+
+concurrency:
+  group: auditoria
+  cancel-in-progress: false
+
+jobs:
+  auditar:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Pruebas
+        run: python -m unittest -v test_auditoria
+
+      - name: Preparar la rama de datos
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          if git ls-remote --exit-code --heads origin auditoria; then
+            git fetch --depth=1 origin auditoria
+            git worktree add --detach datos FETCH_HEAD
+          else
+            git worktree add --detach datos
+            git -C datos switch --orphan auditoria
+          fi
+
+      # Si falla una parte, las demás siguen; el resumen se hace con lo que haya.
+      - name: Foto de lo que muestra la app
+        continue-on-error: true
+        run: python auditoria.py foto datos
+
+      - name: Medidas de las estaciones
+        continue-on-error: true
+        env:
+          AEMET_API_KEY: ${{ secrets.AEMET_API_KEY }}
+        run: python auditoria.py medir datos
+
+      - name: Últimos 12 meses
+        if: inputs.historico
+        env:
+          AEMET_API_KEY: ${{ secrets.AEMET_API_KEY }}
+        run: python auditoria.py historico datos
+
+      - name: Resultados
+        run: python auditoria.py resumir datos
+
+      - name: Guardar
+        run: |
+          cd datos
+          git add -A
+          if git diff --cached --quiet; then
+            echo "Nada nuevo"
+            exit 0
+          fi
+          git commit -q -m "Auditoría $(date -u +%Y-%m-%dT%H:%MZ)"
+          git push origin HEAD:refs/heads/auditoria
+
+      # GitHub desactiva las tareas programadas de un repo público tras 60 días
+      # sin actividad; volver a activarla reinicia ese plazo.
+      - name: Mantener activa la tarea programada
+        if: github.event_name == 'schedule'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh api -X PUT "repos/${{ github.repository }}/actions/workflows/auditoria.yml/enable"
