@@ -1,17 +1,13 @@
 name: Auditoría
 
-# Cada hora guarda lo que muestra la app y lo que miden las estaciones de AEMET,
-# y rehace los resultados. Todo se guarda en la rama «auditoria» (así main no
-# se llena de commits); la tarea de los avisos copia su carpeta web/ a la página.
+# Cada hora guarda lo que muestra la app en los sitios de auditoria_lugares.json
+# y lo que miden sus estaciones de AEMET (y sus boyas, si tienen), y rehace los
+# resultados. Todo se guarda en la rama «auditoria» (así main no se llena de
+# commits); la tarea de los avisos copia su carpeta web/ a la página.
 on:
   schedule:
     - cron: "12 * * * *"
   workflow_dispatch:
-    inputs:
-      historico:
-        description: "Rellenar también los últimos 12 meses (tarda unos 20 minutos)"
-        type: boolean
-        default: false
 
 permissions:
   contents: write
@@ -24,7 +20,9 @@ concurrency:
 jobs:
   auditar:
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    env:
+      PYTHONUNBUFFERED: "1"   # los mensajes salen en el registro según ocurren
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
 
@@ -34,6 +32,10 @@ jobs:
 
       - name: Pruebas
         run: python -m unittest -v test_auditoria
+
+      # Para leer los archivos NetCDF de las boyas.
+      - name: Librerías
+        run: pip install --quiet netCDF4
 
       - name: Preparar la rama de datos
         run: |
@@ -58,11 +60,9 @@ jobs:
           AEMET_API_KEY: ${{ secrets.AEMET_API_KEY }}
         run: python auditoria.py medir datos
 
-      - name: Últimos 12 meses
-        if: inputs.historico
-        env:
-          AEMET_API_KEY: ${{ secrets.AEMET_API_KEY }}
-        run: python auditoria.py historico datos
+      - name: Olas medidas por las boyas (solo sitios con boya)
+        continue-on-error: true
+        run: python auditoria.py boyas datos
 
       - name: Resultados
         run: python auditoria.py resumir datos

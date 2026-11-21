@@ -22,12 +22,12 @@
   main { max-width: 64rem; margin: 0 auto; padding: 1.5rem 1rem 3rem; }
   h1 { margin: 0 0 .25rem; font-size: 1.6rem; }
   h2 { margin: 0 0 .5rem; font-size: 1.2rem; }
-  h3 { margin: 1rem 0 .4rem; font-size: 1rem; }
+  h3 { margin: 0 0 .2rem; font-size: 1.05rem; }
   p { margin: .3rem 0 .6rem; }
   a { color: var(--accent); }
   .muted { color: var(--muted); font-size: .9rem; }
   .card { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 1rem; margin: 1rem 0; }
-  .controls { display: flex; flex-wrap: wrap; gap: .75rem; align-items: end; }
+  .controls { display: flex; flex-wrap: wrap; gap: .75rem; align-items: end; margin-bottom: .5rem; }
   label { display: flex; flex-direction: column; font-size: .85rem; color: var(--muted); gap: .2rem; }
   select { font: inherit; color: var(--text); background: var(--card); border: 1px solid var(--line); border-radius: 8px; padding: .4rem .5rem; min-width: 10rem; }
   .scroll { overflow-x: auto; }
@@ -35,13 +35,18 @@
   th, td { padding: .35rem .5rem; text-align: right; border-bottom: 1px solid var(--line); white-space: nowrap; }
   th { background: var(--head); font-weight: 600; }
   th:first-child, td:first-child { text-align: left; }
-  thead th { position: sticky; top: 0; }
   .grp { text-align: center; border-left: 2px solid var(--line); }
   .sep { border-left: 2px solid var(--line); }
   .ok { background: var(--good-bg); color: var(--good); }
   .mal { background: var(--bad-bg); color: var(--bad); }
   .regular { background: var(--warn-bg); color: var(--warn); }
-  .empty { color: var(--muted); padding: 1rem 0; }
+  .empty { color: var(--muted); padding: .5rem 0; }
+  .sites { display: grid; grid-template-columns: repeat(auto-fit, minmax(19rem, 1fr)); gap: 1rem; }
+  .site { border: 1px solid var(--line); border-radius: 10px; padding: .8rem; }
+  .site table { margin-top: .5rem; }
+  .site th { white-space: normal; vertical-align: bottom; }
+  .site td, .site th { padding: .3rem .4rem; }
+  .note { margin: .6rem 0 0; font-size: .92rem; }
   .tabs { display: flex; gap: .25rem; flex-wrap: wrap; margin-bottom: .75rem; }
   .tabs button { font: inherit; border: 1px solid var(--line); background: var(--card); color: var(--text); border-radius: 999px; padding: .3rem .8rem; cursor: pointer; }
   .tabs button[aria-selected="true"] { background: var(--accent); border-color: var(--accent); color: #fff; }
@@ -52,18 +57,22 @@
 <body>
 <main>
   <h1>Auditoría de MeteoES</h1>
-  <p>Lo que mostró la app frente a lo que midieron después las estaciones de AEMET, en las 52 capitales de provincia y en Coria (la estación más cercana a Torrejoncillo).</p>
+  <p>Lo que mostró la app y lo que pasó de verdad, medido por la estación de AEMET más cercana a cada sitio.</p>
   <p class="muted" id="updated">Cargando…</p>
 
-  <div class="card controls">
-    <label>Lugar <select id="lugar"></select></label>
-  </div>
+  <section class="card">
+    <h2>Resumen del día</h2>
+    <div class="controls">
+      <label>Día <select id="dia"></select></label>
+    </div>
+    <div class="sites" id="resumenDia"></div>
+  </section>
 
   <section class="card">
     <h2>Hora a hora</h2>
-    <p class="muted">Lo que mostraba la app para cada hora y lo que se midió. La lluvia de cada hora es la caída en la hora anterior (la fila de las 18:00 es de 17:00 a 18:00), igual en la app y en AEMET.</p>
+    <p class="muted">La lluvia de cada hora es la caída en la hora anterior (la fila de las 18:00 es de 17:00 a 18:00), igual en la app y en AEMET.</p>
     <div class="controls">
-      <label>Día <select id="dia"></select></label>
+      <label>Sitio <select id="lugar"></select></label>
       <label>Previsión hecha <select id="antelacion">
         <option value="0">a esa misma hora</option>
         <option value="1">1 hora antes</option>
@@ -74,30 +83,28 @@
       </select></label>
     </div>
     <div class="scroll" id="horas"></div>
-    <div class="scroll" id="diaTotal"></div>
+    <div class="scroll" id="olas"></div>
   </section>
 
   <section class="card">
-    <h2>Cuánto acierta</h2>
+    <h2>Cuánto acierta desde que empezó</h2>
     <div class="tabs" role="tablist" id="tabs">
-      <button role="tab" data-k="h" aria-selected="true">Por horas</button>
-      <button role="tab" data-k="d" aria-selected="false">Por días</button>
-      <button role="tab" data-k="hist" aria-selected="false">Últimos 12 meses</button>
+      <button role="tab" data-k="d" aria-selected="true">Por días</button>
+      <button role="tab" data-k="h" aria-selected="false">Por horas</button>
+      <button role="tab" data-k="o" aria-selected="false" hidden>Olas</button>
     </div>
     <p class="muted" id="explica"></p>
     <div class="scroll" id="resumen"></div>
-    <div id="meses"></div>
   </section>
 
   <section class="card">
     <h2>Cómo se mide</h2>
     <ul class="muted">
-      <li><b>Error medio</b>: cuánto se equivoca de media, sin mirar si se pasa o se queda corta.</li>
-      <li><b>Tendencia</b>: positiva si la app suele pasarse y negativa si suele quedarse corta.</li>
-      <li><b>Lluvia</b>: cuenta como «llueve» desde 0,2 mm en una hora o 1 mm en un día.
-        «Acertó» son las horas o días con lluvia que la app anunció; «avisó y no llovió» y «llovió sin avisar» son los fallos.</li>
-      <li>Cada hora se guarda lo que muestra la app (en la posición de la estación) para la hora en curso y las de dentro de 1, 3, 6, 12 y 24 horas, y cada mañana lo de los 3 días siguientes.
-        Los 12 meses anteriores salen de las previsiones antiguas del mismo modelo y de los valores diarios oficiales de AEMET.</li>
+      <li>Cada hora se guarda lo que muestra la app para la hora en curso y las de dentro de 1, 3, 6, 12 y 24 horas, y cada mañana (hacia las 7) lo que da para ese día y los 3 siguientes.
+        Es la misma previsión que pide la app, en las coordenadas del sitio.</li>
+      <li>Lo que pasó es lo medido en la estación de AEMET indicada; puede estar a unos kilómetros y la lluvia cambia mucho de un sitio a otro.</li>
+      <li><b>Error medio</b>: cuánto se equivoca de media. <b>Tendencia</b>: positiva si la app suele pasarse y negativa si suele quedarse corta.</li>
+      <li><b>Lluvia</b>: cuenta como «llueve» desde 0,2 mm en una hora o 1 mm en un día.</li>
       <li>El viento está en km/h: el medido es la media de 10 minutos y la racha la máxima de la hora.</li>
     </ul>
   </section>
@@ -105,6 +112,7 @@
   <footer class="muted">
     Previsión: <a href="https://open-meteo.com/">Weather data by Open-Meteo.com</a> (CC BY 4.0).
     Medidas: © AEMET. Agencia Estatal de Meteorología.
+    <span id="creditoOlas" hidden>Olas medidas: Puertos del Estado; generated using E.U. Copernicus Marine Service Information.</span>
     · <a href="./">MeteoES</a>
   </footer>
 </main>
@@ -125,18 +133,19 @@
   };
 
   let resumen = null;
-  let kind = "h";
+  let kind = "d";
   const dayCache = {};
-
-  const leadName = { h: (l) => l === "0" ? "A esa hora" : `${l} h antes`, d: (l) => l === "1" ? "1 día antes" : `${l} días antes` };
-  leadName.hist = leadName.d;
+  const leadName = { h: (l) => l === "0" ? "A esa hora" : `${l} h antes`, d: (l) => ({ 0: "Esa mañana", 1: "El día antes" })[l] ?? `${l} días antes` };
+  leadName.o = leadName.h;
 
   // Color de una diferencia según lo grande que sea.
   function grade(diff, okLimit, badLimit) {
-    if (diff == null) return "";
+    if (diff == null || Number.isNaN(diff)) return "";
     const a = Math.abs(diff);
     return a <= okLimit ? "ok" : a >= badLimit ? "mal" : "regular";
   }
+  const rainGrade = (f, m, day) => f == null || m == null || (f === 0 && m === 0) ? "" :
+    grade(f - m, Math.max(day ? 1 : 0.3, m * 0.25), Math.max(day ? 5 : 2, m * 0.75));
 
   async function load() {
     try {
@@ -144,17 +153,13 @@
       if (!r.ok) throw new Error(r.status);
       resumen = await r.json();
     } catch {
-      $("updated").textContent = "Aún no hay datos: la auditoría empieza a guardarlos cada hora y los resultados aparecen al día siguiente.";
+      $("updated").textContent = "Aún no hay datos: la auditoría los guarda cada hora y el primer día completo aparece al día siguiente.";
       return;
     }
-    const t = new Date(resumen.updated);
-    $("updated").textContent = "Actualizado: " + t.toLocaleString("es-ES", { dateStyle: "long", timeStyle: "short" });
-
-    const lugar = $("lugar");
-    lugar.add(new Option("Todos los lugares", ""));
-    resumen.lugares.forEach((p) => lugar.add(new Option(p.nombre, p.id)));
-    const saved = store.get("auditoria.lugar");
-    lugar.value = saved != null && [...lugar.options].some((o) => o.value === saved) ? saved : "3526X";
+    $("updated").textContent = "Actualizado: " + new Date(resumen.updated).toLocaleString("es-ES", { dateStyle: "long", timeStyle: "short" });
+    const anyBuoy = resumen.lugares.some((p) => p.boya);
+    document.querySelector('[data-k="o"]').hidden = !anyBuoy;
+    $("creditoOlas").hidden = !anyBuoy;
 
     const dia = $("dia");
     [...resumen.dias].reverse().forEach((d) => {
@@ -162,10 +167,16 @@
       dia.add(new Option(label, d));
     });
     // Por defecto ayer, que ya está completo.
-    if (dia.options.length > 1) dia.selectedIndex = 1;
+    const yesterday = new Date(Date.now() - 864e5).toLocaleDateString("sv-SE", { timeZone: "Europe/Madrid" });
+    if (resumen.dias.includes(yesterday)) dia.value = yesterday;
 
-    lugar.addEventListener("change", () => { store.set("auditoria.lugar", lugar.value); renderHours(); renderSummary(); });
-    dia.addEventListener("change", renderHours);
+    const lugar = $("lugar");
+    resumen.lugares.forEach((p) => lugar.add(new Option(p.nombre, p.id)));
+    const saved = store.get("auditoria.sitio");
+    if (saved && resumen.lugares.some((p) => p.id === saved)) lugar.value = saved;
+
+    dia.addEventListener("change", () => { renderDay(); renderHours(); });
+    lugar.addEventListener("change", () => { store.set("auditoria.sitio", lugar.value); renderHours(); renderSummary(); });
     $("antelacion").addEventListener("change", renderHours);
     $("tabs").addEventListener("click", (e) => {
       const b = e.target.closest("button");
@@ -174,6 +185,7 @@
       [...$("tabs").children].forEach((x) => x.setAttribute("aria-selected", x === b));
       renderSummary();
     });
+    renderDay();
     renderHours();
     renderSummary();
   }
@@ -185,142 +197,151 @@
     return dayCache[d];
   }
 
-  function placeName(id) {
-    return resumen.lugares.find((p) => p.id === id)?.nombre ?? id;
+  // ---------- resumen del día ----------
+
+  async function renderDay() {
+    const box = $("resumenDia");
+    const d = $("dia").value;
+    const doc = d ? await day(d) : null;
+    if (!doc) { box.innerHTML = '<p class="empty">No hay datos de ese día.</p>'; return; }
+    box.innerHTML = resumen.lugares.map((p) => siteCard(p, doc.lugares[p.id])).join("");
   }
+
+  function siteCard(p, lug) {
+    const head = `<h3>${p.nombre}</h3><div class="muted">Medido en la estación de AEMET de ${p.estacion}</div>`;
+    if (!lug) return `<div class="site">${head}<p class="empty">Sin datos ese día.</p></div>`;
+    const prev = lug.dia.prev || {};
+    const cols = ["1", "0"].filter((l) => prev[l]);
+    const m = lug.dia.medido || [];
+    // [nombre, índice en lo previsto, índice en lo medido, decimales, límites del color]
+    const rows = [
+      ["Máxima (°C)", 0, 0, 1, [1, 3]],
+      ["Mínima (°C)", 1, 1, 1, [1, 3]],
+      ["Lluvia (mm)", 2, 2, 1, null],
+      ["Prob. de lluvia", 3, null, 0, null],
+      ["Viento máx. (km/h)", 4, 3, 0, [5, 15]],
+      ["Racha máx. (km/h)", 5, 4, 0, [10, 25]],
+    ];
+    let t = `<table><thead><tr><th></th>${cols.map((l) => `<th>La app ${leadName.d(l).toLowerCase()}</th>`).join("")}<th class="sep">Lo que pasó</th></tr></thead><tbody>`;
+    for (const [name, fi, mi, dec, lim] of rows) {
+      const first = cols.length ? prev[cols[0]][fi] : null;
+      const measured = mi == null ? null : m[mi];
+      const cls = mi == null || measured == null || first == null ? "" :
+        lim ? grade(first - measured, lim[0], lim[1]) : rainGrade(first, measured, true);
+      t += `<tr><td>${name}</td>${cols.map((l) => `<td>${fi === 3 ? (prev[l][3] == null ? "—" : prev[l][3] + " %") : fmt(prev[l][fi], dec)}</td>`).join("")}
+        <td class="sep ${cls}">${mi == null ? "" : fmt(measured, dec)}</td></tr>`;
+    }
+    t += "</tbody></table>";
+    const notes = [];
+    if (!cols.length) notes.push("Ese día no se guardó la previsión diaria (se guarda hacia las 7 de la mañana).");
+    if (lug.dia.horasMedidas < 24) notes.push(`La estación dio ${lug.dia.horasMedidas} de 24 horas${lug.dia.horasMedidas ? "; la lluvia total solo sale con el día completo" : ""}.`);
+    // Horas con lluvia según lo que mostraba la app a esa misma hora.
+    const hours = lug.horas.filter(([, f, med]) => f["0"] && med && med[0] != null);
+    if (hours.length) {
+      const th = resumen.umbrales.lluviaHora;
+      const said = hours.filter(([, f]) => f["0"][0] >= th).length;
+      const rained = hours.filter(([, , med]) => med[0] >= th).length;
+      const both = hours.filter(([, f, med]) => f["0"][0] >= th && med[0] >= th).length;
+      notes.push(rained || said
+        ? `Horas con lluvia: la app marcó ${said} y llovió en ${rained}; coincidieron ${both}.`
+        : "Ni la app marcó lluvia ni llovió.");
+    }
+    return `<div class="site">${head}<div class="scroll">${t}</div>${notes.map((n) => `<p class="note">${n}</p>`).join("")}</div>`;
+  }
+
+  // ---------- hora a hora ----------
 
   async function renderHours() {
     const id = $("lugar").value;
-    const box = $("horas");
-    const totalBox = $("diaTotal");
-    totalBox.innerHTML = "";
-    if (!id) { box.innerHTML = '<p class="empty">Elige un lugar para ver sus horas.</p>'; return; }
-    const d = $("dia").value;
     const lead = $("antelacion").value;
-    const doc = d ? await day(d) : null;
+    const doc = await day($("dia").value);
     const lug = doc?.lugares?.[id];
-    if (!lug) { box.innerHTML = '<p class="empty">No hay datos de este lugar para ese día.</p>'; return; }
     const zone = resumen.lugares.find((p) => p.id === id)?.zona ?? "Europe/Madrid";
-    const rows = lug.horas.filter(([, prev]) => prev[lead]);
-    if (!rows.length) { box.innerHTML = '<p class="empty">Ese día no se guardó ninguna previsión con esa antelación.</p>'; }
-    else {
-      let html = `<table><thead><tr><th rowspan="2">Hora</th>
-        <th class="grp" colspan="3">Lluvia (mm)</th><th class="grp" colspan="2">Viento (km/h)</th>
-        <th class="grp" colspan="2">Racha (km/h)</th><th class="grp" colspan="2">Temperatura (°C)</th></tr>
-        <tr><th class="sep">App</th><th>Prob.</th><th>Medida</th><th class="sep">App</th><th>Medido</th>
-        <th class="sep">App</th><th>Medida</th><th class="sep">App</th><th>Medida</th></tr></thead><tbody>`;
-      for (const [key, prev, med] of rows) {
-        const f = prev[lead];
-        const m = med || [];
-        const hour = new Date(key + ":00:00Z").toLocaleTimeString("es-ES", { hour: "2-digit", minute: "2-digit", timeZone: zone });
-        // Horas secas en los dos lados: sin color, para que se vean las de lluvia.
-        const rainCls = m[0] == null || (f[0] === 0 && m[0] === 0) ? "" : grade(f[0] - m[0], Math.max(0.3, m[0] * 0.25), Math.max(2, m[0] * 0.75));
-        html += `<tr><td>${hour}</td>
-          <td class="sep ${rainCls}">${fmt(f[0])}</td><td>${f[1] == null ? "—" : f[1] + " %"}</td><td class="${rainCls}">${fmt(m[0])}</td>
-          <td class="sep">${fmt(f[2], 0)}</td><td class="${grade(m[1] == null ? null : f[2] - m[1], 5, 15)}">${fmt(m[1], 0)}</td>
-          <td class="sep">${fmt(f[3], 0)}</td><td class="${grade(m[2] == null ? null : f[3] - m[2], 8, 20)}">${fmt(m[2], 0)}</td>
-          <td class="sep">${fmt(f[4])}</td><td class="${grade(m[3] == null ? null : f[4] - m[3], 1, 3)}">${fmt(m[3])}</td></tr>`;
-      }
-      box.innerHTML = html + "</tbody></table>";
+    const hourOf = (key) => new Date(key + ":00:00Z").toLocaleTimeString("es-ES", { hour: "2-digit", minute: "2-digit", timeZone: zone });
+    $("olas").innerHTML = "";
+    const rows = (lug?.horas || []).filter(([, prev]) => prev[lead]);
+    if (!rows.length) { $("horas").innerHTML = '<p class="empty">Ese día no se guardó ninguna previsión de este sitio con esa antelación.</p>'; return; }
+    let html = `<table><thead><tr><th rowspan="2">Hora</th>
+      <th class="grp" colspan="3">Lluvia (mm)</th><th class="grp" colspan="2">Viento (km/h)</th>
+      <th class="grp" colspan="2">Racha (km/h)</th><th class="grp" colspan="2">Temperatura (°C)</th></tr>
+      <tr><th class="sep">App</th><th>Prob.</th><th>Medida</th><th class="sep">App</th><th>Medido</th>
+      <th class="sep">App</th><th>Medida</th><th class="sep">App</th><th>Medida</th></tr></thead><tbody>`;
+    for (const [key, prev, med] of rows) {
+      const f = prev[lead];
+      const m = med || [];
+      const rc = rainGrade(f[0], m[0], false);
+      html += `<tr><td>${hourOf(key)}</td>
+        <td class="sep ${rc}">${fmt(f[0])}</td><td>${f[1] == null ? "—" : f[1] + " %"}</td><td class="${rc}">${fmt(m[0])}</td>
+        <td class="sep">${fmt(f[2], 0)}</td><td class="${m[1] == null ? "" : grade(f[2] - m[1], 5, 15)}">${fmt(m[1], 0)}</td>
+        <td class="sep">${fmt(f[3], 0)}</td><td class="${m[2] == null ? "" : grade(f[3] - m[2], 10, 25)}">${fmt(m[2], 0)}</td>
+        <td class="sep">${fmt(f[4])}</td><td class="${m[3] == null ? "" : grade(f[4] - m[3], 1, 3)}">${fmt(m[3])}</td></tr>`;
     }
-    const dayPrev = lug.dia?.prev ?? {};
-    const med = lug.dia?.medido;
-    const leads = Object.keys(dayPrev).sort();
-    if (leads.length) {
-      let t = `<h3>El día completo en ${placeName(id)}</h3><table><thead><tr><th>Previsión hecha</th>
-        <th class="sep">Máx. app</th><th>Medida</th><th class="sep">Mín. app</th><th>Medida</th>
-        <th class="sep">Lluvia app</th><th>Prob.</th><th>Medida</th></tr></thead><tbody>`;
-      for (const l of leads) {
-        const f = dayPrev[l];
-        const m = med || [];
-        t += `<tr><td>${leadName.d(l)}</td>
-          <td class="sep">${fmt(f[0])}</td><td class="${grade(m[0] == null ? null : f[0] - m[0], 1, 3)}">${fmt(m[0])}</td>
-          <td class="sep">${fmt(f[1])}</td><td class="${grade(m[1] == null ? null : f[1] - m[1], 1, 3)}">${fmt(m[1])}</td>
-          <td class="sep">${fmt(f[2])}</td><td>${f[3] == null ? "—" : f[3] + " %"}</td>
-          <td class="${m[2] == null ? "" : grade(f[2] - m[2], Math.max(1, m[2] * 0.25), Math.max(5, m[2] * 0.75))}">${fmt(m[2])}</td></tr>`;
-      }
-      totalBox.innerHTML = t + "</tbody></table>" + (med ? "" : '<p class="muted">Lo medido del día completo aparece cuando el día termina.</p>');
+    $("horas").innerHTML = html + "</tbody></table>";
+
+    const waves = (lug?.olas || []).filter(([, prev]) => prev[lead]);
+    if (!waves.length) return;
+    let w = `<h3 style="margin-top:1rem">Olas</h3><table><thead><tr><th rowspan="2">Hora</th>
+      <th class="grp" colspan="2">Altura (m)</th><th class="grp" colspan="2">Periodo (s)</th><th class="grp" colspan="2">Dirección (°)</th></tr>
+      <tr><th class="sep">App</th><th>Medida</th><th class="sep">App</th><th>Medido</th><th class="sep">App</th><th>Medida</th></tr></thead><tbody>`;
+    for (const [key, prev, med] of waves) {
+      const f = prev[lead];
+      const m = med || [];
+      const hc = m[0] == null ? "" : grade(f[0] - m[0], Math.max(0.2, m[0] * 0.15), Math.max(0.6, m[0] * 0.4));
+      w += `<tr><td>${hourOf(key)}</td><td class="sep ${hc}">${fmt(f[0])}</td><td class="${hc}">${fmt(m[0], 2)}</td>
+        <td class="sep">${fmt(f[1])}</td><td class="${m[1] == null ? "" : grade(f[1] - m[1], 1, 3)}">${fmt(m[1])}</td>
+        <td class="sep">${fmt(f[2], 0)}</td><td>${fmt(m[2], 0)}</td></tr>`;
     }
+    $("olas").innerHTML = w + "</tbody></table>";
   }
+
+  // ---------- cuánto acierta ----------
 
   const VARS = {
     h: [["lluvia", "Lluvia", "mm"], ["viento", "Viento", "km/h"], ["racha", "Racha", "km/h"], ["temp", "Temperatura", "°C"]],
-    d: [["tmax", "Máxima", "°C"], ["tmin", "Mínima", "°C"], ["lluvia", "Lluvia", "mm"]],
-    hist: [["tmax", "Máxima", "°C"], ["tmin", "Mínima", "°C"], ["lluvia", "Lluvia", "mm"], ["viento", "Viento medio", "km/h"], ["racha", "Racha máxima", "km/h"]],
+    d: [["tmax", "Máxima", "°C"], ["tmin", "Mínima", "°C"], ["lluvia", "Lluvia", "mm"], ["viento", "Viento máx.", "km/h"], ["racha", "Racha máx.", "km/h"]],
+    o: [["ola", "Altura de ola", "m"], ["periodo", "Periodo", "s"]],
   };
-
-  function statsFor(k) {
-    const s = resumen.stats?.[k];
-    if (!s) return null;
-    const id = $("lugar").value;
-    return id ? s.lugares?.[id] : s.total;
-  }
 
   function renderSummary() {
     const k = kind;
     const id = $("lugar").value;
-    const where = id ? placeName(id) : "todos los lugares";
-    const hist = resumen.historico || {};
+    const name = resumen.lugares.find((p) => p.id === id)?.nombre ?? "";
     $("explica").textContent = {
-      h: `Cada hora comparada con lo que mostraba la app esa hora o antes, en ${where}. Solo días completos.`,
-      d: `Máxima, mínima y lluvia del día con lo que mostraba la app 1, 2 y 3 días antes, en ${where}.`,
-      hist: hist.desde
-        ? `Del ${new Date(hist.desde).toLocaleDateString("es-ES")} al ${new Date(hist.hasta).toLocaleDateString("es-ES")}, con las previsiones antiguas del mismo modelo y los valores diarios de AEMET, en ${where}.`
-        : "Todavía no se han rellenado los últimos 12 meses.",
+      d: `Máxima, mínima, lluvia y viento de cada día en ${name}, con lo que mostraba la app esa mañana y los días antes. Solo días completos.`,
+      h: `Cada hora en ${name}, con lo que mostraba la app a esa hora o antes. Solo días completos.`,
+      o: `Cada hora, la ola que mostraba la app frente a la medida por la boya de ${name}.`,
     }[k];
-    const s = statsFor(k);
+    const s = resumen.stats?.[k]?.lugares?.[id];
     const box = $("resumen");
-    $("meses").innerHTML = "";
-    if (!s || !Object.keys(s).length) { box.innerHTML = '<p class="empty">Aún no hay suficientes datos.</p>'; return; }
+    if (!s || !Object.keys(s).length) { box.innerHTML = '<p class="empty">Aún no hay ningún día completo. Aparecerá el día después de empezar.</p>'; return; }
     const leads = Object.keys(s).sort((a, b) => a - b);
     const vars = VARS[k];
-    let html = `<table><thead><tr><th rowspan="2">Previsión hecha</th>`;
-    for (const [, name, unit] of vars) {
-      html += name === "Lluvia"
-        ? `<th class="grp" colspan="5">${name}</th>`
-        : `<th class="grp" colspan="2">${name} (${unit})</th>`;
+    let html = `<table><thead><tr><th rowspan="2">Previsión hecha</th><th rowspan="2">Casos</th>`;
+    for (const [v, label, unit] of vars) {
+      html += v === "lluvia" ? `<th class="grp" colspan="5">${label} (${unit})</th>` : `<th class="grp" colspan="2">${label} (${unit})</th>`;
     }
     html += `</tr><tr>`;
     for (const [v] of vars) {
       html += v === "lluvia"
-        ? `<th class="sep">Error medio (mm)</th><th>Tendencia</th><th>Acertó</th><th>Avisó y no llovió</th><th>Llovió sin avisar</th>`
+        ? `<th class="sep">Error medio</th><th>Tendencia</th><th>Acertó</th><th>Avisó y no llovió</th><th>Llovió sin avisar</th>`
         : `<th class="sep">Error medio</th><th>Tendencia</th>`;
     }
     html += `</tr></thead><tbody>`;
     for (const l of leads) {
-      html += `<tr><td>${leadName[k](l)}</td>`;
+      const n = Math.max(...vars.map(([v]) => s[l][v]?.[0] ?? 0));
+      html += `<tr><td>${leadName[k](l)}</td><td>${n}</td>`;
       for (const [v] of vars) {
         const x = s[l][v];
         if (!x) { html += v === "lluvia" ? '<td class="sep">—</td><td></td><td></td><td></td><td></td>' : '<td class="sep">—</td><td></td>'; continue; }
-        const [n, mae, bias, a, b, c] = x;
-        if (v === "lluvia") {
-          html += `<td class="sep">${fmt(mae, 2)}</td><td>${signed(bias, 2)}</td>
-            <td>${a} de ${a + c} (${pct(a, a + c)})</td><td>${b}</td><td>${c}</td>`;
-        } else {
-          html += `<td class="sep">${fmt(mae)}</td><td>${signed(bias)}</td>`;
-        }
+        const [, mae, bias, a, b, c] = x;
+        const dec = v === "ola" ? 2 : 1;
+        html += v === "lluvia"
+          ? `<td class="sep">${fmt(mae, 2)}</td><td>${signed(bias, 2)}</td><td>${a} de ${a + c} (${pct(a, a + c)})</td><td>${b}</td><td>${c}</td>`
+          : `<td class="sep">${fmt(mae, dec)}</td><td>${signed(bias, dec)}</td>`;
       }
       html += `</tr>`;
     }
     box.innerHTML = html + "</tbody></table>";
-    if (k !== "h") renderMonths(k);
-  }
-
-  function renderMonths(k) {
-    const s = resumen.stats?.[k]?.meses;
-    if (!s || $("lugar").value) return;
-    const months = Object.keys(s).sort();
-    if (!months.length) return;
-    let html = `<h3>Mes a mes (previsión hecha 1 día antes, todos los lugares)</h3><div class="scroll"><table><thead><tr><th>Mes</th>
-      <th class="sep">Error máx. (°C)</th><th>Error mín. (°C)</th><th class="sep">Días de lluvia acertados</th><th>Avisó y no llovió</th></tr></thead><tbody>`;
-    for (const m of months) {
-      const x = s[m]["1"] || {};
-      const r = x.lluvia || [];
-      const label = new Date(m + "-15").toLocaleDateString("es-ES", { month: "long", year: "numeric" });
-      html += `<tr><td>${label}</td><td class="sep">${fmt(x.tmax?.[1])}</td><td>${fmt(x.tmin?.[1])}</td>
-        <td class="sep">${r.length ? `${r[3]} de ${r[3] + r[5]} (${pct(r[3], r[3] + r[5])})` : "—"}</td><td>${r[4] ?? "—"}</td></tr>`;
-    }
-    $("meses").innerHTML = html + "</tbody></table></div>";
   }
 
   load();

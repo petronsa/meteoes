@@ -1,25 +1,30 @@
-"""Auditoría de MeteoES: lo que mostró la app frente a lo que midieron las estaciones de AEMET.
+"""Auditoría de MeteoES: lo que mostró la app en unos sitios elegidos frente a lo que pasó de verdad.
 
 Uso (DATOS es la carpeta de la rama «auditoria», donde se guarda todo):
 
   python auditoria.py foto DATOS                        cada hora: guarda lo que muestra la app
   AEMET_API_KEY=... python auditoria.py medir DATOS     cada hora: guarda lo medido en las estaciones
+  python auditoria.py boyas DATOS                       cada hora: olas medidas (solo si algún sitio tiene boya)
   python auditoria.py resumir DATOS                     rehace los resultados de la web (DATOS/web)
-  AEMET_API_KEY=... python auditoria.py historico DATOS una vez: los últimos 12 meses, por días
 
-La previsión se pide igual que la pide la app (Open-Meteo, modelo por defecto,
-coordenadas con dos decimales) en la posición de cada estación de AEMET de
-auditoria_lugares.json. Todas las horas van en UTC; cada valor horario es el de
-la hora que termina en la etiqueta (las 18 son de 17:00 a 18:00), igual en
-Open-Meteo y en AEMET.
+Los sitios están en auditoria_lugares.json: la previsión se pide como la pide la
+app (Open-Meteo, modelo por defecto, coordenadas con dos decimales) en las
+coordenadas del sitio, y se compara con la estación de AEMET indicada en
+«estacion». Un sitio de costa puede llevar también «boya» (una de
+auditoria_boyas.json, boyas de Puertos del Estado publicadas por Copernicus
+Marine) para comparar las olas; leerlas necesita netCDF4.
 
-Carpetas dentro de DATOS:
-  fotos/AAAA-MM-DD.json       por estación y hora: {antelación en horas: [mm, %, viento, racha, temp.]}
-  fotos_dias/AAAA-MM-DD.json  por estación: {antelación en días: [máx., mín., mm, %]}
-  medidas/AAAA-MM-DD.json     por estación y hora: [mm, viento, racha, temp., máx. de la hora, mín. de la hora]
-  historico.json              filas diarias de los últimos 12 meses (previsiones antiguas)
-  web/                        lo que se publica en la página (resumen.json y dias/)
-Los archivos van por fecha de la Península; el viento siempre en km/h.
+Todas las horas van en UTC; cada valor horario es el de la hora que termina en la
+etiqueta (las 18 son de 17:00 a 18:00), igual en Open-Meteo y en AEMET.
+
+Carpetas dentro de DATOS (archivos por fecha de la Península):
+  fotos/        por sitio y hora: {antelación en horas: [mm, %, viento, racha, temp.]}
+  fotos_dias/   por sitio: {antelación en días: [máx., mín., mm, %, viento máx., racha máx.]}
+  fotos_olas/   por sitio y hora: {antelación en horas: [altura, periodo, dirección]}
+  medidas/      por estación y hora: [mm, viento, racha, temp., máx. de la hora, mín. de la hora]
+  medidas_olas/ por boya y hora: [altura, periodo, dirección]
+  web/          lo que se publica en la página (resumen.json y dias/)
+El viento siempre en km/h.
 """
 
 import json
@@ -32,24 +37,25 @@ from datetime import date, datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
 FORECAST = "https://api.open-meteo.com/v1/forecast"
-PREVIOUS = "https://previous-runs-api.open-meteo.com/v1/forecast"
+MARINE = "https://marine-api.open-meteo.com/v1/marine"
 AEMET_OBS = "https://opendata.aemet.es/opendata/api/observacion/convencional/todas"
-AEMET_DAILY = ("https://opendata.aemet.es/opendata/api/valores/climatologicos/diarios/datos/"
-               "fechaini/{ini}T00:00:00UTC/fechafin/{fin}T23:59:59UTC/estacion/{id}")
-PLACES = os.path.join(os.path.dirname(os.path.abspath(__file__)), "auditoria_lugares.json")
+BUOY_FILE = ("https://s3.waw3-1.cloudferro.com/mdl-native-03/native/INSITU_IBI_PHYBGCWAV_DISCRETE_MYNRT_013_033/"
+             "cmems_obs-ins_ibi_phybgcwav_mynrt_na_irr_202311/latest/{day}/IR_TS_MO_{id}_{day}.nc")
+HERE = os.path.dirname(os.path.abspath(__file__))
+PLACES = os.path.join(HERE, "auditoria_lugares.json")
+BUOYS = os.path.join(HERE, "auditoria_boyas.json")
 MADRID = ZoneInfo("Europe/Madrid")
 
 HOURLY = ("precipitation", "precipitation_probability", "wind_speed_10m", "wind_gusts_10m", "temperature_2m")
+WAVES = ("wave_height", "wave_period", "wave_direction")
 LEADS_H = (0, 1, 3, 6, 12, 24)   # horas de antelación que se guardan
-LEADS_D = (1, 2, 3)              # días de antelación
-# La foto de los próximos días se toma en la primera ejecución desde las 6 UTC (7 u 8 de la Península).
+LEADS_D = (0, 1, 2, 3)           # días de antelación (0: lo que decía esa misma mañana)
+# La foto de los días se toma en la primera ejecución desde las 6 UTC (7 u 8 de la Península).
 DAILY_FROM_UTC = 6
 RAIN_H = 0.2   # mm en una hora para decir que llovió
 RAIN_D = 1.0   # mm en un día
 KMH = 3.6
 RECENT_DAYS = 3        # días que se rehacen en cada resumen (por si llegan datos tarde)
-HIST_DAYS = 365
-AEMET_CHUNK_DAYS = 180
 
 
 # ---------- utilidades ----------
@@ -123,15 +129,11 @@ def open_meteo(url: str, params: dict) -> list[dict]:
 
 
 def aemet(url: str, key: str, attempts: int = 4):
-    """Dos pasos de AEMET: la petición devuelve la dirección de los datos. Si no hay datos, None."""
+    """Dos pasos de AEMET: la petición devuelve la dirección de los datos."""
     error = None
     for i in range(attempts):
         try:
             meta = _decode(_get(url, {"api_key": key}))
-            if meta.get("estado") == 404:
-                return None
-            if meta.get("estado") == 429:
-                raise RuntimeError("demasiadas peticiones")
             if meta.get("estado") != 200:
                 raise RuntimeError(f"{meta.get('estado')} {meta.get('descripcion')}")
             return _decode(_get(meta["datos"]))
@@ -155,11 +157,26 @@ def fetch_forecast(places: list[dict]) -> list[dict]:
         "hourly": ",".join(HOURLY),
         "timezone": "GMT",
         "forecast_days": 5,
+        "past_days": 1,   # como la app; así el día de hoy está completo desde las 00 de la Península
     })
 
 
-def take_snapshot(datos: str, now: datetime, places: list[dict], responses: list[dict]) -> int:
-    """Guarda la previsión de la hora en curso y las siguientes y, una vez al día, la de los próximos días."""
+def fetch_waves(places: list[dict]) -> list[dict]:
+    """Oleaje como lo pide la app: el punto de mar más cercano al sitio."""
+    return open_meteo(MARINE, {
+        "latitude": ",".join(coord(p["lat"]) for p in places),
+        "longitude": ",".join(coord(p["lon"]) for p in places),
+        "hourly": ",".join(WAVES),
+        "timezone": "GMT",
+        "forecast_days": 3,
+        "cell_selection": "sea",
+    })
+
+
+def take_snapshot(datos: str, now: datetime, places: list[dict], responses: list[dict],
+                  variables: tuple = HOURLY, folder: str = "fotos") -> int:
+    """Guarda la previsión de la hora en curso y las siguientes y, una vez al día, la de los días
+    (esto último solo con la previsión del tiempo, no con la del oleaje)."""
     base = now.astimezone(timezone.utc).replace(minute=0, second=0, microsecond=0)
     files: dict[str, dict] = {}
     days: dict[str, dict] = {}
@@ -170,7 +187,7 @@ def take_snapshot(datos: str, now: datetime, places: list[dict], responses: list
         idx = {t: i for i, t in enumerate(times)}
 
         def vals(i):
-            return [r1(h.get(v, [None] * len(times))[i]) for v in HOURLY]
+            return [r1(h.get(v, [None] * len(times))[i]) for v in variables]
 
         for lead in LEADS_H:
             t = base + timedelta(hours=lead)
@@ -181,12 +198,12 @@ def take_snapshot(datos: str, now: datetime, places: list[dict], responses: list
             if all(x is None for x in v):
                 continue
             name = file_date(t)
-            doc = files.setdefault(name, read_json(os.path.join(datos, "fotos", name + ".json"), {}))
+            doc = files.setdefault(name, read_json(os.path.join(datos, folder, name + ".json"), {}))
             # setdefault: si la tarea se repite en la misma hora, vale la primera foto.
             doc.setdefault(p["id"], {}).setdefault(hour_key(t), {}).setdefault(str(lead), v)
             saved += 1
 
-        if base.hour < DAILY_FROM_UTC:
+        if base.hour < DAILY_FROM_UTC or variables is not HOURLY:
             continue
         zone = ZoneInfo(p["zona"])
         today = base.astimezone(zone).date()
@@ -197,15 +214,19 @@ def take_snapshot(datos: str, now: datetime, places: list[dict], responses: list
                 continue
             name = target.isoformat()
             doc = days.setdefault(name, read_json(os.path.join(datos, "fotos_dias", name + ".json"), {}))
-            probs = [row[1] for row in rows if row[1] is not None]
+
+            def top(col):
+                xs = [row[col] for row in rows if row[col] is not None]
+                return max(xs) if xs else None
+
             doc.setdefault(p["id"], {}).setdefault(str(lead), [
                 max(row[4] for row in rows),
                 min(row[4] for row in rows),
                 r1(sum(row[0] for row in rows)),
-                max(probs) if probs else None,
+                top(1), top(2), top(3),
             ])
     for name, doc in files.items():
-        write_json(os.path.join(datos, "fotos", name + ".json"), doc)
+        write_json(os.path.join(datos, folder, name + ".json"), doc)
     for name, doc in days.items():
         write_json(os.path.join(datos, "fotos_dias", name + ".json"), doc)
     return saved
@@ -222,15 +243,14 @@ def kmh(v):
     return None if v is None else round(float(v) * KMH, 1)
 
 
-def store_measurements(datos: str, places: list[dict], observations: list[dict]) -> int:
+def store_measurements(datos: str, stations: set[str], observations: list[dict]) -> int:
     """Guarda las observaciones horarias de nuestras estaciones (AEMET da las últimas 24 horas)."""
-    ids = {p["id"] for p in places}
     files: dict[str, dict] = {}
     saved = 0
     for o in observations:
         try:
             ident = o["idema"]
-            if ident not in ids:
+            if ident not in stations:
                 continue
             t = parse_time(o["fint"])
             if t.minute != 0:
@@ -252,42 +272,129 @@ def store_measurements(datos: str, places: list[dict], observations: list[dict])
     return saved
 
 
+# ---------- boyas: olas medidas ----------
+
+def read_buoy_file(raw: bytes) -> list[tuple]:
+    """(días desde 1950, altura, periodo medio, dirección) de cada medida de un archivo NetCDF de boya.
+
+    Se queda con el primer valor válido de cada fila (la boya da uno por profundidad)
+    y descarta los marcados como malos por el control de calidad (bueno: 0, 1 o 2).
+    """
+    import netCDF4  # solo hace falta en la tarea de GitHub
+
+    with netCDF4.Dataset("boya.nc", memory=raw) as d:
+        if not d["TIME"].units.startswith("days since 1950-01-01"):
+            raise ValueError(f"Unidades de tiempo inesperadas: {d['TIME'].units}")
+        times = [float(x) for x in d["TIME"][:]]
+
+        def col(name):
+            if name not in d.variables:
+                return [None] * len(times)
+            vals = d[name][:]
+            qc = d[name + "_QC"][:] if name + "_QC" in d.variables else None
+            out = []
+            for i in range(len(times)):
+                row = vals[i] if vals.ndim > 1 else [vals[i]]
+                flags = (qc[i] if qc.ndim > 1 else [qc[i]]) if qc is not None else [0] * len(row)
+                good = [float(v) for v, f in zip(row, flags)
+                        if not getattr(v, "mask", False) and (getattr(f, "mask", False) or int(f) in (0, 1, 2))]
+                out.append(good[0] if good else None)
+            return out
+
+        return list(zip(times, col("VHM0"), col("VTM02"), col("VMDR")))
+
+
+def buoy_hours(rows: list[tuple]) -> dict[str, list]:
+    """Medidas en horas en punto: {hora: [altura, periodo, dirección]}."""
+    base = datetime(1950, 1, 1, tzinfo=timezone.utc)
+    out = {}
+    for days, hs, tm, dr in rows:
+        t = base + timedelta(days=days)
+        t = t.replace(second=0, microsecond=0) + timedelta(minutes=1 if t.second >= 30 else 0)
+        if t.minute != 0 or (hs is None and tm is None):
+            continue
+        out[hour_key(t)] = [None if hs is None else round(hs, 2), r1(tm), None if dr is None else round(dr)]
+    return out
+
+
+def store_buoys(datos: str, measured: dict[str, dict[str, list]]) -> int:
+    files: dict[str, dict] = {}
+    saved = 0
+    for ident, hours in measured.items():
+        for key, v in hours.items():
+            name = file_date(parse_hour(key))
+            doc = files.setdefault(name, read_json(os.path.join(datos, "medidas_olas", name + ".json"), {}))
+            doc.setdefault(ident, {})[key] = v
+            saved += 1
+    for name, doc in files.items():
+        write_json(os.path.join(datos, "medidas_olas", name + ".json"), doc)
+    return saved
+
+
+def fetch_buoys(buoy_ids: list[str], now: datetime) -> dict[str, dict[str, list]]:
+    """Archivos de hoy y de ayer (UTC) de cada boya; una boya que falla no para las demás."""
+    measured = {}
+    days = [(now - timedelta(days=k)).strftime("%Y%m%d") for k in (1, 0)]
+    for ident in buoy_ids:
+        hours = {}
+        for day in days:
+            try:
+                hours.update(buoy_hours(read_buoy_file(_get(BUOY_FILE.format(day=day, id=ident), timeout=60))))
+            except Exception as e:  # noqa: BLE001
+                print(f"Boya {ident} {day}: {e}", file=sys.stderr)
+        if hours:
+            measured[ident] = hours
+    return measured
+
+
 # ---------- resumir: resultados para la web ----------
+
+def _max(xs):
+    xs = [x for x in xs if x is not None]
+    return max(xs) if xs else None
+
+
+def _min(xs):
+    xs = [x for x in xs if x is not None]
+    return min(xs) if xs else None
+
 
 def build_day(datos: str, day: str, places: list[dict]) -> dict | None:
     """Lo previsto y lo medido de un día (fecha de la Península), hora a hora y en total."""
     d = date.fromisoformat(day)
-    near = [(d + timedelta(days=k)).isoformat() for k in (-1, 0, 1)]
     fotos = read_json(os.path.join(datos, "fotos", day + ".json"), {})
-    medidas = {}
-    for name in near:
+    fotos_dias = read_json(os.path.join(datos, "fotos_dias", day + ".json"), {})
+    fotos_olas = read_json(os.path.join(datos, "fotos_olas", day + ".json"), {})
+    olas = read_json(os.path.join(datos, "medidas_olas", day + ".json"), {})
+    medidas: dict[str, dict] = {}
+    for name in ((d + timedelta(days=k)).isoformat() for k in (-1, 0, 1)):
         for ident, hours in read_json(os.path.join(datos, "medidas", name + ".json"), {}).items():
             medidas.setdefault(ident, {}).update(hours)
-    fotos_dias = read_json(os.path.join(datos, "fotos_dias", day + ".json"), {})
     out = {}
     for p in places:
-        ident = p["id"]
-        m = medidas.get(ident, {})
-        horas = []
-        for key in sorted(fotos.get(ident, {})):
-            mv = m.get(key)
-            horas.append([key, fotos[ident][key], mv[:4] if mv else None])
-        # El día completo en la hora local del lugar, con la misma regla que Open-Meteo (horas 00 a 23).
+        m = medidas.get(p["estacion"], {})
+        horas = [[key, prev, (m.get(key) or [None] * 4)[:4] if key in m else None]
+                 for key, prev in sorted(fotos.get(p["id"], {}).items())]
+        # El día completo en la hora local del sitio, con la misma regla que Open-Meteo (horas 00 a 23).
         zone = ZoneInfo(p["zona"])
         mine = [v for k, v in m.items() if parse_hour(k).astimezone(zone).date() == d]
         medido = None
-        if len(mine) >= 22:
-            tmax = [v[4] if v[4] is not None else v[3] for v in mine]
-            tmin = [v[5] if v[5] is not None else v[3] for v in mine]
+        if mine:
             rain = [v[0] for v in mine]
             medido = [
-                max((x for x in tmax if x is not None), default=None),
-                min((x for x in tmin if x is not None), default=None),
+                _max(v[4] if v[4] is not None else v[3] for v in mine),
+                _min(v[5] if v[5] is not None else v[3] for v in mine),
                 r1(sum(rain)) if None not in rain and len(mine) == 24 else None,
+                _max(v[1] for v in mine),
+                _max(v[2] for v in mine),
             ]
-        prev = fotos_dias.get(ident)
-        if horas or prev:
-            out[ident] = {"horas": horas, "dia": {"prev": prev or {}, "medido": medido}}
+        lug = {"horas": horas, "dia": {"prev": fotos_dias.get(p["id"], {}), "medido": medido,
+                                       "horasMedidas": len(mine)}}
+        if p.get("boya"):
+            mo = olas.get(p["boya"], {})
+            lug["olas"] = [[key, prev, mo.get(key)] for key, prev in sorted(fotos_olas.get(p["id"], {}).items())]
+        if horas or lug["dia"]["prev"] or mine or lug.get("olas"):
+            out[p["id"]] = lug
     return {"fecha": day, "lugares": out} if out else None
 
 
@@ -314,40 +421,37 @@ def _out(acc, rain: bool):
 
 
 def records(day_doc: dict):
-    """(tipo, lugar, mes, antelación, variable, previsto, medido, umbral de lluvia)."""
-    month = day_doc["fecha"][:7]
+    """(tipo, sitio, antelación, variable, previsto, medido, umbral de lluvia)."""
     for ident, lug in day_doc["lugares"].items():
         for _, prev, med in lug["horas"]:
             if not med:
                 continue
             for lead, f in prev.items():
-                yield "h", ident, month, lead, "lluvia", f[0], med[0], RAIN_H
-                yield "h", ident, month, lead, "viento", f[2], med[1], None
-                yield "h", ident, month, lead, "racha", f[3], med[2], None
-                yield "h", ident, month, lead, "temp", f[4], med[3], None
+                yield "h", ident, lead, "lluvia", f[0], med[0], RAIN_H
+                yield "h", ident, lead, "viento", f[2], med[1], None
+                yield "h", ident, lead, "racha", f[3], med[2], None
+                yield "h", ident, lead, "temp", f[4], med[3], None
         med = lug["dia"]["medido"]
-        if med:
+        if med and lug["dia"]["horasMedidas"] >= 22:
             for lead, f in lug["dia"]["prev"].items():
-                yield "d", ident, month, lead, "tmax", f[0], med[0], None
-                yield "d", ident, month, lead, "tmin", f[1], med[1], None
-                yield "d", ident, month, lead, "lluvia", f[2], med[2], RAIN_D
-
-
-HIST_COLS = ("tmax", "tmin", "lluvia", "viento", "racha")
-
-
-def hist_records(rows: list[list]):
-    for ident, day, lead, *vals in rows:
-        f, m = vals[:5], vals[5:]
-        for i, name in enumerate(HIST_COLS):
-            yield "hist", ident, day[:7], str(lead), name, f[i], m[i], RAIN_D if name == "lluvia" else None
+                yield "d", ident, lead, "tmax", f[0], med[0], None
+                yield "d", ident, lead, "tmin", f[1], med[1], None
+                yield "d", ident, lead, "lluvia", f[2], med[2], RAIN_D
+                yield "d", ident, lead, "viento", f[4], med[3], None
+                yield "d", ident, lead, "racha", f[5], med[4], None
+        for _, prev, med in lug.get("olas", []):
+            if not med:
+                continue
+            for lead, f in prev.items():
+                yield "o", ident, lead, "ola", f[0], med[0], None
+                yield "o", ident, lead, "periodo", f[1], med[1], None
 
 
 def aggregate(recs) -> dict:
     stats: dict = {}
-    for kind, ident, month, lead, var, f, m, rain in recs:
-        k = stats.setdefault(kind, {"total": {}, "lugares": {}, "meses": {}})
-        for group in (k["total"], k["lugares"].setdefault(ident, {}), k["meses"].setdefault(month, {})):
+    for kind, ident, lead, var, f, m, rain in recs:
+        k = stats.setdefault(kind, {"total": {}, "lugares": {}})
+        for group in (k["total"], k["lugares"].setdefault(ident, {})):
             _add(group.setdefault(lead, {}).setdefault(var, [_acc(), rain is not None])[0], f, m, rain)
 
     def finish(node):
@@ -372,19 +476,16 @@ def summarize(datos: str, now: datetime, places: list[dict]) -> dict:
     def all_records():
         for day in days:
             # El día de hoy aún no ha terminado: se ve en su página, pero no cuenta en el resumen.
-            if day >= today.isoformat():
-                continue
-            yield from records(read_json(os.path.join(dias_dir, day + ".json"), {"fecha": day, "lugares": {}}))
-        hist = read_json(os.path.join(datos, "historico.json"), {})
-        yield from hist_records(hist.get("filas", []))
+            if day < today.isoformat():
+                yield from records(read_json(os.path.join(dias_dir, day + ".json"), {"fecha": day, "lugares": {}}))
 
-    hist = read_json(os.path.join(datos, "historico.json"), {})
+    buoys = {b["id"]: b["nombre"] for b in load_places(BUOYS)}
     resumen = {
         "updated": now.astimezone(timezone.utc).isoformat(timespec="seconds"),
-        "fuentes": "Previsión: Open-Meteo.com (CC BY 4.0). Medidas: © AEMET. Agencia Estatal de Meteorología.",
-        "lugares": [{"id": p["id"], "nombre": p["nombre"], "zona": p["zona"]} for p in places],
+        "lugares": [{"id": p["id"], "nombre": p["nombre"], "zona": p["zona"],
+                     "estacion": p.get("estacionNombre") or p["estacion"],
+                     "boya": buoys.get(p.get("boya"))} for p in places],
         "dias": days,
-        "historico": {"desde": hist.get("desde"), "hasta": hist.get("hasta")},
         "umbrales": {"lluviaHora": RAIN_H, "lluviaDia": RAIN_D},
         "stats": aggregate(all_records()),
     }
@@ -392,137 +493,36 @@ def summarize(datos: str, now: datetime, places: list[dict]) -> dict:
     return resumen
 
 
-# ---------- histórico: últimos 12 meses con las previsiones antiguas ----------
-
-PREV_VARS = ("temperature_2m", "precipitation", "wind_speed_10m", "wind_gusts_10m")
-
-
-def fetch_previous(place: dict, start: date, end: date) -> dict:
-    hourly = ",".join(f"{v}_previous_day{n}" for v in PREV_VARS for n in LEADS_D)
-    return open_meteo(PREVIOUS, {
-        "latitude": coord(place["lat"]), "longitude": coord(place["lon"]),
-        "hourly": hourly, "timezone": "GMT",
-        "start_date": start.isoformat(), "end_date": (end + timedelta(days=1)).isoformat(),
-    })[0]
-
-
-def previous_daily(doc: dict) -> dict[tuple[str, int], list]:
-    """Resume por días UTC, como los valores diarios de AEMET.
-
-    Temperatura máxima, mínima y viento medio de las horas 00 a 23; racha máxima de
-    las horas 01 a 24; lluvia de 07 a 07 del día siguiente (el día pluviométrico de AEMET).
-    """
-    h = doc.get("hourly") or {}
-    times = [datetime.fromisoformat(t).replace(tzinfo=timezone.utc) for t in h.get("time", [])]
-    idx = {t: i for i, t in enumerate(times)}
-    out = {}
-    days = sorted({t.date() for t in times})
-    for d in days:
-        start = datetime(d.year, d.month, d.day, tzinfo=timezone.utc)
-        for lead in LEADS_D:
-            def series(var, first, count):
-                col = h.get(f"{var}_previous_day{lead}")
-                if not col:
-                    return None
-                vals = []
-                for k in range(first, first + count):
-                    i = idx.get(start + timedelta(hours=k))
-                    if i is None or col[i] is None:
-                        return None
-                    vals.append(col[i])
-                return vals
-            temp = series("temperature_2m", 0, 24)
-            wind = series("wind_speed_10m", 0, 24)
-            gust = series("wind_gusts_10m", 1, 24)
-            rain = series("precipitation", 8, 24)
-            out[(d.isoformat(), lead)] = [
-                r1(max(temp)) if temp else None,
-                r1(min(temp)) if temp else None,
-                r1(sum(rain)) if rain else None,
-                r1(sum(wind) / 24) if wind else None,
-                r1(max(gust)) if gust else None,
-            ]
-    return out
-
-
-def aemet_number(v, factor: float = 1.0):
-    """'12,3' → 12.3; 'Ip' (inapreciable) → 0; vacío, 'Acum' o 'Varias' → None."""
-    if v is None:
-        return None
-    s = str(v).strip().replace(",", ".")
-    if s == "Ip":
-        return 0.0
-    try:
-        return round(float(s) * factor, 1)
-    except ValueError:
-        return None
-
-
-def aemet_daily(rows: list[dict]) -> dict[str, list]:
-    out = {}
-    for r in rows or []:
-        try:
-            out[r["fecha"]] = [aemet_number(r.get("tmax")), aemet_number(r.get("tmin")), aemet_number(r.get("prec")),
-                               aemet_number(r.get("velmedia"), KMH), aemet_number(r.get("racha"), KMH)]
-        except (KeyError, TypeError):
-            continue
-    return out
-
-
-def build_history(datos: str, key: str, places: list[dict], today: date) -> dict:
-    start, end = today - timedelta(days=HIST_DAYS), today - timedelta(days=1)
-    filas = []
-    for n, p in enumerate(places, 1):
-        try:
-            prev = previous_daily(fetch_previous(p, start, end))
-        except Exception as e:  # noqa: BLE001
-            print(f"{p['nombre']}: sin previsiones antiguas ({e})", file=sys.stderr)
-            continue
-        medido: dict[str, list] = {}
-        a = start
-        while a <= end:
-            b = min(a + timedelta(days=AEMET_CHUNK_DAYS - 1), end)
-            try:
-                medido.update(aemet_daily(aemet(AEMET_DAILY.format(ini=a, fin=b, id=p["id"]), key)))
-            except Exception as e:  # noqa: BLE001
-                print(f"{p['nombre']} {a}..{b}: sin datos de AEMET ({e})", file=sys.stderr)
-            time.sleep(3)   # AEMET limita las peticiones por minuto
-            a = b + timedelta(days=1)
-        for (day, lead), f in sorted(prev.items()):
-            m = medido.get(day)
-            if m and day <= end.isoformat() and any(x is not None for x in f):
-                filas.append([p["id"], day, lead, *f, *m])
-        print(f"[{n}/{len(places)}] {p['nombre']}: {sum(1 for x in filas if x[0] == p['id'])} filas")
-    doc = {"desde": start.isoformat(), "hasta": end.isoformat(),
-           "columnas": ["estacion", "fecha", "antelacion_dias",
-                        *(f"prev_{c}" for c in HIST_COLS), *(f"medido_{c}" for c in HIST_COLS)],
-           "filas": filas}
-    write_json(os.path.join(datos, "historico.json"), doc)
-    return doc
-
-
 # ---------- programa ----------
 
 def main() -> None:
-    if len(sys.argv) < 3 or sys.argv[1] not in ("foto", "medir", "resumir", "historico"):
+    if len(sys.argv) < 3 or sys.argv[1] not in ("foto", "medir", "boyas", "resumir"):
         sys.exit(__doc__)
     mode, datos = sys.argv[1], sys.argv[2]
     places = load_places()
+    coast = [p for p in places if p.get("boya")]
     now = datetime.now(timezone.utc)
     if mode == "foto":
         print(f"{take_snapshot(datos, now, places, fetch_forecast(places))} previsiones horarias guardadas")
-    elif mode in ("medir", "historico"):
+        if coast:
+            n = take_snapshot(datos, now, coast, fetch_waves(coast), WAVES, "fotos_olas")
+            print(f"{n} previsiones de oleaje guardadas")
+    elif mode == "medir":
         key = os.environ.get("AEMET_API_KEY")
         if not key:
             sys.exit("Falta AEMET_API_KEY")
-        if mode == "medir":
-            obs = aemet(AEMET_OBS, key)
-            if not isinstance(obs, list):
-                sys.exit("AEMET no ha dado observaciones")
-            print(f"{store_measurements(datos, places, obs)} medidas horarias guardadas")
-        else:
-            doc = build_history(datos, key, places, now.date())
-            print(f"Histórico {doc['desde']} a {doc['hasta']}: {len(doc['filas'])} filas")
+        obs = aemet(AEMET_OBS, key)
+        if not isinstance(obs, list):
+            sys.exit("AEMET no ha dado observaciones")
+        print(f"{store_measurements(datos, {p['estacion'] for p in places}, obs)} medidas horarias guardadas")
+    elif mode == "boyas":
+        if not coast:
+            print("Ningún sitio tiene boya")
+            return
+        measured = fetch_buoys(sorted({p["boya"] for p in coast}), now)
+        print(f"{store_buoys(datos, measured)} medidas de {len(measured)} boyas guardadas")
+        if not measured:
+            sys.exit("Ninguna boya ha dado datos")
     else:
         r = summarize(datos, now, places)
         print(f"Resumen con {len(r['dias'])} días -> {os.path.join(datos, 'web')}")
