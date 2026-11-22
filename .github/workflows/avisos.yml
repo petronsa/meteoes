@@ -65,7 +65,16 @@ jobs:
       - uses: actions/upload-pages-artifact@v3
         with:
           path: site
+      # A veces GitHub aún no ve el archivo recién subido y la publicación falla con
+      # «No artifacts named github-pages were found»; se reintenta una vez.
       - id: deploy
+        continue-on-error: true
+        uses: actions/deploy-pages@v4
+      - name: Esperar antes de reintentar
+        if: steps.deploy.outcome == 'failure'
+        run: sleep 20
+      - name: Reintentar la publicación
+        if: steps.deploy.outcome == 'failure'
         uses: actions/deploy-pages@v4
 
       # GitHub desactiva las tareas programadas de un repo público tras 60 días
