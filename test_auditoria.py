@@ -128,6 +128,9 @@ class AuditoriaTest(unittest.TestCase):
         lug = build_day(self.datos, "2026-11-20", [PLACE])["lugares"]["torrejoncillo"]
         self.assertIsNone(lug["dia"]["medido"][2])
         self.assertEqual(lug["dia"]["horasMedidas"], 20)
+        # Las horas medidas salen en la tabla aunque no se guardara su previsión.
+        self.assertEqual(len(lug["horas"]), 20)
+        self.assertEqual(lug["horas"][0][1], {})
 
     def test_medidas_de_boya_en_horas_en_punto(self):
         # Días desde 1950: 28083 es el 21-11-2026 a las 00:00 UTC.

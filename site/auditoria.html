@@ -70,20 +70,19 @@
 
   <section class="card">
     <h2>Hora a hora</h2>
-    <p class="muted">La lluvia de cada hora es la caída en la hora anterior (la fila de las 18:00 es de 17:00 a 18:00), igual en la app y en AEMET.</p>
+    <p class="muted">Para cada hora del día elegido arriba: lo que predijo la app el día antes (24 horas antes), lo que mostraba a esa misma hora y lo que pasó.
+      La lluvia de cada hora es la caída en la hora anterior (la fila de las 18:00 es de 17:00 a 18:00), igual en la app y en AEMET.</p>
     <div class="controls">
       <label>Sitio <select id="lugar"></select></label>
-      <label>Previsión hecha <select id="antelacion">
-        <option value="0">a esa misma hora</option>
-        <option value="1">1 hora antes</option>
-        <option value="3">3 horas antes</option>
-        <option value="6">6 horas antes</option>
-        <option value="12">12 horas antes</option>
-        <option value="24">24 horas antes</option>
+      <label>Dato <select id="dato">
+        <option value="lluvia">Lluvia</option>
+        <option value="viento">Viento</option>
+        <option value="racha">Rachas</option>
+        <option value="temp">Temperatura</option>
+        <option value="olas" hidden>Olas</option>
       </select></label>
     </div>
     <div class="scroll" id="horas"></div>
-    <div class="scroll" id="olas"></div>
   </section>
 
   <section class="card">
@@ -135,7 +134,12 @@
   let resumen = null;
   let kind = "d";
   const dayCache = {};
-  const leadName = { h: (l) => l === "0" ? "A esa hora" : `${l} h antes`, d: (l) => ({ 0: "Esa mañana", 1: "El día antes" })[l] ?? `${l} días antes` };
+  const leadName = {
+    h: (l) => ({ 0: "A esa hora", 24: "El día antes" })[l] ?? `${l} h antes`,
+    d: (l) => ({ 0: "Esa mañana", 1: "El día antes" })[l] ?? `${l} días antes`,
+  };
+  // Por horas solo se comparan el día antes y la misma hora, como en la tabla de arriba.
+  const SHOWN_LEADS = { h: ["24", "0"], o: ["24", "0"] };
   leadName.o = leadName.h;
 
   // Color de una diferencia según lo grande que sea.
@@ -177,7 +181,8 @@
 
     dia.addEventListener("change", () => { renderDay(); renderHours(); });
     lugar.addEventListener("change", () => { store.set("auditoria.sitio", lugar.value); renderHours(); renderSummary(); });
-    $("antelacion").addEventListener("change", renderHours);
+    $("dato").addEventListener("change", renderHours);
+    $("dato").querySelector('[value="olas"]').hidden = !anyBuoy;
     $("tabs").addEventListener("click", (e) => {
       const b = e.target.closest("button");
       if (!b) return;
@@ -251,47 +256,40 @@
 
   // ---------- hora a hora ----------
 
+  // Cada dato: [unidad, decimales, índice en lo previsto, índice en lo medido, color de la diferencia].
+  const HOUR_DATA = {
+    lluvia: ["mm", 1, 0, 0, (f, m) => rainGrade(f, m, false)],
+    viento: ["km/h", 0, 2, 1, (f, m) => grade(f - m, 5, 15)],
+    racha: ["km/h", 0, 3, 2, (f, m) => grade(f - m, 10, 25)],
+    temp: ["°C", 1, 4, 3, (f, m) => grade(f - m, 1, 3)],
+    olas: ["m", 1, 0, 0, (f, m) => grade(f - m, Math.max(0.2, m * 0.15), Math.max(0.6, m * 0.4))],
+  };
+
   async function renderHours() {
     const id = $("lugar").value;
-    const lead = $("antelacion").value;
+    const what = $("dato").value;
     const doc = await day($("dia").value);
     const lug = doc?.lugares?.[id];
     const zone = resumen.lugares.find((p) => p.id === id)?.zona ?? "Europe/Madrid";
     const hourOf = (key) => new Date(key + ":00:00Z").toLocaleTimeString("es-ES", { hour: "2-digit", minute: "2-digit", timeZone: zone });
-    $("olas").innerHTML = "";
-    const rows = (lug?.horas || []).filter(([, prev]) => prev[lead]);
-    if (!rows.length) { $("horas").innerHTML = '<p class="empty">Ese día no se guardó ninguna previsión de este sitio con esa antelación.</p>'; return; }
-    let html = `<table><thead><tr><th rowspan="2">Hora</th>
-      <th class="grp" colspan="3">Lluvia (mm)</th><th class="grp" colspan="2">Viento (km/h)</th>
-      <th class="grp" colspan="2">Racha (km/h)</th><th class="grp" colspan="2">Temperatura (°C)</th></tr>
-      <tr><th class="sep">App</th><th>Prob.</th><th>Medida</th><th class="sep">App</th><th>Medido</th>
-      <th class="sep">App</th><th>Medida</th><th class="sep">App</th><th>Medida</th></tr></thead><tbody>`;
+    const [unit, dec, fi, mi, color] = HOUR_DATA[what];
+    const rows = (what === "olas" ? lug?.olas : lug?.horas) || [];
+    if (!rows.length) { $("horas").innerHTML = '<p class="empty">Ese día no hay datos de este sitio.</p>'; return; }
+    const cell = (f, m) => {
+      if (!f) return "<td>—</td>";
+      const v = f[fi];
+      // En la lluvia se añade la probabilidad que mostraba la app.
+      const prob = what === "lluvia" && f[1] != null ? ` <span class="muted">(${f[1]} %)</span>` : "";
+      return `<td class="${v == null || m == null ? "" : color(v, m)}">${fmt(v, dec)}${prob}</td>`;
+    };
+    let html = `<table><thead><tr><th>Hora</th><th>La app el día antes</th><th>La app a esa hora</th>
+      <th class="sep">Lo que pasó</th></tr></thead><tbody>`;
     for (const [key, prev, med] of rows) {
-      const f = prev[lead];
-      const m = med || [];
-      const rc = rainGrade(f[0], m[0], false);
-      html += `<tr><td>${hourOf(key)}</td>
-        <td class="sep ${rc}">${fmt(f[0])}</td><td>${f[1] == null ? "—" : f[1] + " %"}</td><td class="${rc}">${fmt(m[0])}</td>
-        <td class="sep">${fmt(f[2], 0)}</td><td class="${m[1] == null ? "" : grade(f[2] - m[1], 5, 15)}">${fmt(m[1], 0)}</td>
-        <td class="sep">${fmt(f[3], 0)}</td><td class="${m[2] == null ? "" : grade(f[3] - m[2], 10, 25)}">${fmt(m[2], 0)}</td>
-        <td class="sep">${fmt(f[4])}</td><td class="${m[3] == null ? "" : grade(f[4] - m[3], 1, 3)}">${fmt(m[3])}</td></tr>`;
+      const m = med ? med[mi] : null;
+      html += `<tr><td>${hourOf(key)}</td>${cell(prev["24"], m)}${cell(prev["0"], m)}
+        <td class="sep"><b>${fmt(m, what === "olas" ? 2 : dec)}</b></td></tr>`;
     }
-    $("horas").innerHTML = html + "</tbody></table>";
-
-    const waves = (lug?.olas || []).filter(([, prev]) => prev[lead]);
-    if (!waves.length) return;
-    let w = `<h3 style="margin-top:1rem">Olas</h3><table><thead><tr><th rowspan="2">Hora</th>
-      <th class="grp" colspan="2">Altura (m)</th><th class="grp" colspan="2">Periodo (s)</th><th class="grp" colspan="2">Dirección (°)</th></tr>
-      <tr><th class="sep">App</th><th>Medida</th><th class="sep">App</th><th>Medido</th><th class="sep">App</th><th>Medida</th></tr></thead><tbody>`;
-    for (const [key, prev, med] of waves) {
-      const f = prev[lead];
-      const m = med || [];
-      const hc = m[0] == null ? "" : grade(f[0] - m[0], Math.max(0.2, m[0] * 0.15), Math.max(0.6, m[0] * 0.4));
-      w += `<tr><td>${hourOf(key)}</td><td class="sep ${hc}">${fmt(f[0])}</td><td class="${hc}">${fmt(m[0], 2)}</td>
-        <td class="sep">${fmt(f[1])}</td><td class="${m[1] == null ? "" : grade(f[1] - m[1], 1, 3)}">${fmt(m[1])}</td>
-        <td class="sep">${fmt(f[2], 0)}</td><td>${fmt(m[2], 0)}</td></tr>`;
-    }
-    $("olas").innerHTML = w + "</tbody></table>";
+    $("horas").innerHTML = html + `</tbody></table><p class="muted">En ${unit}. «—»: esa hora no se guardó la previsión o la estación no dio el dato.</p>`;
   }
 
   // ---------- cuánto acierta ----------
@@ -308,13 +306,13 @@
     const name = resumen.lugares.find((p) => p.id === id)?.nombre ?? "";
     $("explica").textContent = {
       d: `Máxima, mínima, lluvia y viento de cada día en ${name}, con lo que mostraba la app esa mañana y los días antes. Solo días completos.`,
-      h: `Cada hora en ${name}, con lo que mostraba la app a esa hora o antes. Solo días completos.`,
+      h: `Cada hora en ${name}, con lo que predijo la app el día antes y lo que mostraba a esa misma hora. Solo días completos.`,
       o: `Cada hora, la ola que mostraba la app frente a la medida por la boya de ${name}.`,
     }[k];
     const s = resumen.stats?.[k]?.lugares?.[id];
     const box = $("resumen");
     if (!s || !Object.keys(s).length) { box.innerHTML = '<p class="empty">Aún no hay ningún día completo. Aparecerá el día después de empezar.</p>'; return; }
-    const leads = Object.keys(s).sort((a, b) => a - b);
+    const leads = SHOWN_LEADS[k] ? SHOWN_LEADS[k].filter((l) => s[l]) : Object.keys(s).sort((a, b) => b - a);
     const vars = VARS[k];
     let html = `<table><thead><tr><th rowspan="2">Previsión hecha</th><th rowspan="2">Casos</th>`;
     for (const [v, label, unit] of vars) {

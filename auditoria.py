@@ -373,8 +373,10 @@ def build_day(datos: str, day: str, places: list[dict]) -> dict | None:
     out = {}
     for p in places:
         m = medidas.get(p["estacion"], {})
-        horas = [[key, prev, (m.get(key) or [None] * 4)[:4] if key in m else None]
-                 for key, prev in sorted(fotos.get(p["id"], {}).items())]
+        # Todas las horas del día con previsión o con medida, para que la tabla no tenga huecos.
+        prevs = fotos.get(p["id"], {})
+        keys = sorted(set(prevs) | {k for k in m if file_date(parse_hour(k)) == day})
+        horas = [[key, prevs.get(key, {}), m[key][:4] if key in m else None] for key in keys]
         # El día completo en la hora local del sitio, con la misma regla que Open-Meteo (horas 00 a 23).
         zone = ZoneInfo(p["zona"])
         mine = [v for k, v in m.items() if parse_hour(k).astimezone(zone).date() == d]
