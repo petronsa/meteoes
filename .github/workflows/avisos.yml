@@ -2,7 +2,8 @@ name: Avisos AEMET
 
 on:
   schedule:
-    - cron: "7,37 * * * *"   # cada 30 min (GitHub puede retrasarlo unos minutos)
+    # De respaldo: GitHub se salta muchas. La que manda es la cadena del final.
+    - cron: "7,37 * * * *"
   workflow_dispatch:
   push:
     branches: [main]
@@ -20,7 +21,7 @@ concurrency:
 jobs:
   publicar:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 45   # incluye la espera hasta el siguiente turno
     environment:
       name: github-pages
       url: ${{ steps.deploy.outputs.page_url }}
@@ -32,7 +33,7 @@ jobs:
           python-version: "3.12"
 
       - name: Pruebas
-        run: python -m unittest -v test_avisos test_mapa test_observacion test_salud test_auditoria
+        run: python -m unittest -v test_avisos test_mapa test_observacion test_salud test_auditoria test_cadena
 
       - name: Descargar y filtrar avisos
         env:
@@ -70,7 +71,7 @@ jobs:
       # GitHub desactiva las tareas programadas de un repo público tras 60 días
       # sin actividad; volver a activarla reinicia ese plazo.
       - name: Mantener activa la tarea programada
-        if: github.event_name == 'schedule'
+        if: github.event_name != 'push'
         env:
           GH_TOKEN: ${{ github.token }}
         run: gh api -X PUT "repos/${{ github.repository }}/actions/workflows/avisos.yml/enable"
@@ -81,3 +82,13 @@ jobs:
       # y luego una vez al día mientras siga así.
       - name: Comprobar que los datos están al día
         run: python salud.py site
+
+      # GitHub se salta muchas ejecuciones programadas (llegaba a 3 o 4 al día).
+      # Esta espera al siguiente turno (minuto 7 o 37) y lanza la siguiente; corre
+      # aunque algo haya fallado, para que un fallo suelto no pare la cadena.
+      # Cancelar una ejecución en GitHub la para hasta la siguiente programada.
+      - name: Lanzar la siguiente ejecución
+        if: ${{ !cancelled() }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python cadena.py avisos.yml 7,37

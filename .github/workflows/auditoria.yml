@@ -6,6 +6,7 @@ name: Auditoría
 # commits); la tarea de los avisos copia su carpeta web/ a la página.
 on:
   schedule:
+    # De respaldo: GitHub se salta muchas. La que manda es la cadena del final.
     - cron: "12 * * * *"
   workflow_dispatch:
 
@@ -22,7 +23,7 @@ jobs:
     runs-on: ubuntu-latest
     env:
       PYTHONUNBUFFERED: "1"   # los mensajes salen en el registro según ocurren
-    timeout-minutes: 15
+    timeout-minutes: 75   # incluye la espera hasta el siguiente turno
     steps:
       - uses: actions/checkout@v4
 
@@ -81,7 +82,13 @@ jobs:
       # GitHub desactiva las tareas programadas de un repo público tras 60 días
       # sin actividad; volver a activarla reinicia ese plazo.
       - name: Mantener activa la tarea programada
-        if: github.event_name == 'schedule'
         env:
           GH_TOKEN: ${{ github.token }}
         run: gh api -X PUT "repos/${{ github.repository }}/actions/workflows/auditoria.yml/enable"
+
+      # Espera al siguiente turno (minuto 12) y lanza la siguiente ejecución; ver cadena.py.
+      - name: Lanzar la siguiente ejecución
+        if: ${{ !cancelled() }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python cadena.py auditoria.yml 12
